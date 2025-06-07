@@ -1,11 +1,28 @@
 import sys
+import socket
+import threading
+from ipaddress import IPv4Interface
+
+import netifaces
+from scapy.all import ARP, Ether, srp
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QPushButton, QTableWidget,
     QTableWidgetItem, QLabel
 )
-from scapy.all import ARP, Ether, srp
-import socket
-import threading
+
+def get_local_network_cidr():
+    for iface in netifaces.interfaces():
+        if iface == "lo":
+            continue
+        addrs = netifaces.ifaddresses(iface)
+        if netifaces.AF_INET in addrs:
+            ipv4_info = addrs[netifaces.AF_INET][0]
+            ip = ipv4_info['addr']
+            netmask = ipv4_info['netmask']
+            interface = IPv4Interface(f"{ip}/{netmask}")
+            network = interface.network
+            return str(network)
+    return None
 
 class CharlotScanWiFi(QWidget):
     def __init__(self):
@@ -34,19 +51,25 @@ class CharlotScanWiFi(QWidget):
         self.scan_button.setEnabled(False)
         self.table.setRowCount(0)
 
-        # Run scan in separate thread to not freeze GUI
         threading.Thread(target=self._scan).start()
 
     def _scan(self):
-        # Common local network subnet for Wi-Fi, adjust if needed
-        ip_range = "192.168.1.0/24"
+        ip_range = get_local_network_cidr()
+        if not ip_range:
+            self.info_label.setText("Error: Could not determine network range.")
+            self.scan_button.setEnabled(True)
+            return
 
-        # Create ARP request packet
         arp = ARP(pdst=ip_range)
         ether = Ether(dst="ff:ff:ff:ff:ff:ff")
-        packet = ether/arp
+        packet = ether / arp
 
-        result = srp(packet, timeout=3, verbose=0)[0]
+        try:
+            result = srp(packet, timeout=3, verbose=0)[0]
+        except PermissionError:
+            self.info_label.setText("Error: Run this program with sudo/root for scanning.")
+            self.scan_button.setEnabled(True)
+            return
 
         devices = []
         for sent, received in result:
@@ -69,6 +92,7 @@ class CharlotScanWiFi(QWidget):
 
         self.info_label.setText(f"Scan complete: {len(devices)} device(s) found.")
         self.scan_button.setEnabled(True)
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
